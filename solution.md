@@ -2,14 +2,14 @@
 
 ## Business Value
 
-Currently, brokers have no convenient way to define holidays for trading symbols. 
-They must manually adjust the symbol's trading schedule before and after a holiday, 
-leading to inefficiencies and potential errors. 
+Currently, brokers have no convenient way to define holidays for trading symbols.
+They must manually specify the symbols intervals before and after a holiday,
+leading to inefficiencies and potential errors.
 Implementing a dedicated holiday scheduling feature will:
-- Reduce manual intervention;
+- Reduce manual intervention in symbols intervals;
 - Prevent trading on designated holidays;
 - Ensure consistency and accuracy in trading schedules;
-- Improve broker experience and operational efficiency;
+- Improve broker operational efficiency;
 
 ## Description
 
@@ -20,9 +20,9 @@ for the selected dates.
 ### Requirements:
 - Introduce a new Holiday Schedule entity (`Holiday`) associated with symbols;
 - Modify API for creating, updating, and deleting holidays;
-- Modify existing trading logic to prevent trading on configured holidays;
+- Modify existing admin application logic for API to prevent trading on configured holidays;
+  - Return the symbol intervals considering the weekend;
 - Emit system events when a holiday schedule is modified;
-- Ensure backward compatibility with existing scheduling mechanisms;
 
 Holiday entity:
 
@@ -30,7 +30,8 @@ Holiday entity:
 |--------------|----------|-------------|---------------------------|
 | `holiday_id` | `Long`   | `PK`        | Holiday id                |
 | `symbol_id`  | `Long`   | `FK`        | A financial instrument Id |
-| `date`       | `Date`   | `NotNull`   | Holiday date when         |
+| `date_start` | `Date`   | `NotNull`   | Holiday date start        |
+| `date_end`   | `Date`   | `NotNull`   | Holiday date end          |
 | `reason`     | `String` |             | Holiday description       |
 
 
@@ -40,25 +41,30 @@ Holiday entity:
 #### Description: 
 The broker configures a specific date when the symbol should not be tradable.
 #### Business logic:
-- Broker wants to disallow trading a symbol on a certain day;
-- The date of the holiday is specified without timezone;
+- Broker wants to disallow trading a symbol on a certain days;
+- The dates of the holiday is specified without timezone;
 - Once a holiday is set, traders will not be able to place orders for that symbol on that day;
 #### Technical details:
 1. The request is sent in an asynchronous `CUDHolidayRequest` message;
 2. The holiday date is stored in the database with the date type (ISO 8601 YYYY-MM-DD);
 3. After successful holiday creation the system sends asynchronous event `CUDHolidayResponse`;
 #### Validations:
-1. The date must be in the future (holidays cannot be set in the past);
+1. The start date must not be earlier than the current date (holidays cannot be set in the past);
 2. More than one holiday per symbol cannot be placed on the same day;
-3. The date must be in the format `YYYY-MM-DD`;
-4. For `CREATE` operation `symbol_id` and `date` is required;
+3. The dates must be in the format `YYYY-MM-DD`;
+4. For `CREATE` operation `symbol_id`, `date_start` and `date_end` is required;
+5. If start_date == end_date, it is a single holiday;
+6. Holidays do not overlap (no two holidays can overlap the same dates by symbol);
+7. start_date <= end_date (cannot specify the end before the start);
+
 #### Request body example:
 ```json
 {
   "symbol_id": 1001,
   "operation": "CREATE",
-  "date": "2025-01-01",
-  "reason": "New Year's Day"
+  "date_start": "2025-01-01",
+  "date_end": "2025-01-03",
+  "reason": "New Year's Days"
 }
 ```
 #### Response body example:
@@ -67,32 +73,36 @@ The broker configures a specific date when the symbol should not be tradable.
   "symbol_id": 1001,
   "holiday_id": 12345,
   "operation": "CREATE",
-  "date": "2025-01-01",
-  "reason": "New Year's Day"
+  "date_start": "2025-01-01",
+  "date_end": "2025-01-03",
+  "reason": "New Year's Days"
 }
 ```
 
 ### 2. Broker updates holiday
 #### Description:
-The broker modifies an existing holiday (e.g., changes the date).
+The broker modifies an existing holiday (e.g., changes the dates).
 #### Business logic:
-- If the holiday is rescheduled, the broker should be able to change the date;
+- If the holiday is rescheduled, the broker should be able to change the dates;
 #### Technical details:
-1. the update is performed via an asynchronous `CUDHolidayRequest` message;
-2. After a successful update, the system sends a `CUDHolidayResponse` event;
+1. The update is performed via an asynchronous `CUDHolidayRequest` message;
+2. After a successful update, the system sends a `CUDHolidayResponse` message;
 #### Validations:
 1. A holiday must exist;
-2. The new date must be in the future;
-3. Only holidays that have not yet occurred can be changed;
-4. For `UPDATE` operation `symbol_id`, `holiday_id` and `date` is required;
+2. The start date must not be earlier than the current date;
+3. For `UPDATE` operation `symbol_id`, `holiday_id`, `date_start` and `date_end` is required;
+4. If start_date == end_date, it is a single holiday;
+5. Holidays do not overlap (no two holidays can overlap the same dates by symbol);
+6. start_date <= end_date (cannot specify the end before the start);
 #### Request body example:
 ```json
 {
   "symbol_id": 1001,
   "holiday_id": 12345,
   "operation": "UPDATE",
-  "date": "2025-01-02",
-  "reason": "New Year's Day"
+  "date_start": "2025-01-02",
+  "date_end": "2025-01-03",
+  "reason": "New Year's Days"
 }
 ```
 #### Response body example:
@@ -101,8 +111,9 @@ The broker modifies an existing holiday (e.g., changes the date).
   "symbol_id": 1001,
   "holiday_id": 12345,
   "operation": "UPDATE",
-  "date": "2025-01-02",
-  "reason": "New Year's Day"
+  "date_start": "2025-01-02",
+  "date_end": "2025-01-03",
+  "reason": "New Year's Days"
 }
 ```
 
@@ -110,10 +121,10 @@ The broker modifies an existing holiday (e.g., changes the date).
 #### Description:
 Broker removes a holiday.
 #### Business logic:
-- If the holiday is no longer needed, it should be removed and the symbol will become tradable again;
+- If the holiday is no longer needed, it should be removed;
 #### Technical details:
 - The deletion is performed via an asynchronous `CUDHolidayRequest` message;
-- After deletion, the system sends the `CUDHolidayResponse` event;
+- After deletion, the system sends the `CUDHolidayResponse` message;
 #### Validations:
 - Only an existing holiday can be deleted;
 - For `DELETE` operation `holiday_id` is required;
@@ -131,7 +142,8 @@ Broker removes a holiday.
   "symbol_id": 1001,
   "holiday_id": 12345,
   "operation": "DELETE",
-  "date": "2025-01-02",
+  "date_start": "2025-01-02",
+  "date_end": "2025-01-03",
   "reason": "New Year's Day"
 }
 ```
@@ -142,7 +154,7 @@ Trader attempts to place an order on a holiday
 - Trading the symbol on a holiday is not allowed;
 - An attempt to place an order must be rejected with a corresponding error;
 #### Technical details:
-- When a trader attempts to send a request to place an order, the system checks the date and the list of set holidays;
+- When a trader tries to send an order placement request, the system checks the symbol intervals that correspond to a given holiday;
 - If the symbol is on a holiday, an error is returned;
 
 ### 5. Broker requests a list of all holidays or for a specified symbol
@@ -166,7 +178,8 @@ Broker requests a list of all holidays or for a specified symbol
     {
       "symbol_id": 1001,
       "holiday_id": 12345,
-      "date": "2025-01-02",
+      "date_start": "2025-01-02",
+      "date_end": "2025-01-03",
       "reason": "New Year's Day"
     }
   ]
@@ -186,21 +199,22 @@ When a holiday is added, updated, or removed, `HolidayChangedEvent` is triggered
   "symbol_id": 1001,
   "holiday_id": 12345,
   "operation": "DELETE",
-  "date": "2025-01-02",
-  "reason": "New Year's Day"
+  "date_start": "2025-01-02",
+  "date_end": "2025-01-03",
+  "reason": "New Year's Days"
 }
 ```
 
 
 ## API Protocol
 
-| Message                  | Body                                                                                                                                                                                       | Description                                                  |
-|--------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------|
-| `GetHolidayListRequest`  | optional `symbol_id`: `int64`                                                                                                                                                              | Get list of existing holidays. symbol_id is optional filter. |
-| `GetHolidayListResponse` | required `holidays`: `Holiday[]`                                                                                                                                                           |                                                              |
-| `CUDHolidayRequest`      | optional `symbol_id`: `int64`<br/> optional `holiday_id`: `int64`<br/> required `operation`: `enum (CREATE, UPDATE, DELETE)`<br/> optional `date`: `date`<br/> optional `reason`: `string` | Create/Update/Delete holiday                                 |
-| `CUDHolidayResponse`     | required `symbol_id`: `int64`<br/> required `holiday_id`: `int64`<br/> required `operation`: `enum (CREATE, UPDATE, DELETE)`<br/> required `date`: `date`<br/> optional `reason`: `string` | Modification is done successfully                            |
-| `HolidayChangedEvent`    | required `symbol_id`: `int64`<br/> required `holiday_id`: `int64`<br/> required `operation`: `enum (CREATE, UPDATE, DELETE)`<br/> required `date`: `date`<br/> optional `reason`: `string` | Server event on holiday modification                         |
+| Message                  | Body                                                                                                                                                                                                                              | Description                                                  |
+|--------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------|
+| `GetHolidayListRequest`  | optional `symbol_id`: `int64`                                                                                                                                                                                                     | Get list of existing holidays. symbol_id is optional filter. |
+| `GetHolidayListResponse` | required `holidays`: `Holiday[]`                                                                                                                                                                                                  |                                                              |
+| `CUDHolidayRequest`      | optional `symbol_id`: `int64`<br/> optional `holiday_id`: `int64`<br/> required `operation`: `enum (CREATE, UPDATE, DELETE)`<br/> optional `date_start`: `date`<br/> optional `date_end`: `date`<br/> optional `reason`: `string` | Create/Update/Delete holiday                                 |
+| `CUDHolidayResponse`     | required `symbol_id`: `int64`<br/> required `holiday_id`: `int64`<br/> required `operation`: `enum (CREATE, UPDATE, DELETE)`<br/> required `date_start`: `date`<br/> required `date_end`: `date`<br/> optional `reason`: `string` | Modification is done successfully                            |
+| `HolidayChangedEvent`    | required `symbol_id`: `int64`<br/> required `holiday_id`: `int64`<br/> required `operation`: `enum (CREATE, UPDATE, DELETE)`<br/> required `date_start`: `date`<br/> required `date_end`: `date`<br/> optional `reason`: `string` | Server event on holiday modification                         |
 
 
 ## Test cases
